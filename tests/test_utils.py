@@ -3,6 +3,10 @@ from __future__ import annotations
 import unittest
 from types import SimpleNamespace
 
+import convert_material
+import convert_selected_nodes
+import convert_world
+import import_textures
 import utils
 
 
@@ -63,6 +67,76 @@ class UtilsTests(unittest.TestCase):
         utils.set_texture_colorspace(texture, "Roughness")
 
         self.assertEqual(texture.filename_colorspace, "data")
+
+    def test_convert_principled_material_creates_rendererman_branch(self) -> None:
+        material = utils.build_fake_material_tree()
+        image = utils.find_first_node_by_type(material.node_tree, "ShaderNodeTexImage")
+        image.image = SimpleNamespace(filepath="/textures/albedo.png")
+
+        report = utils.convert_principled_material(material)
+
+        rm_shader = utils.find_first_node_by_type(material.node_tree, "PxrSurface")
+        rm_output = utils.find_first_node_by_type(material.node_tree, "RendermanOutputNode")
+        rm_texture = utils.find_first_node_by_type(material.node_tree, "PxrTexture")
+        self.assertIsNotNone(rm_shader)
+        self.assertIsNotNone(rm_output)
+        self.assertIsNotNone(rm_texture)
+        self.assertEqual(rm_texture.filename, "/textures/albedo.png")
+        self.assertTrue(any(entry.startswith("INFO:") for entry in report))
+
+    def test_convert_selected_nodes_duplicates_supported_selection(self) -> None:
+        node_tree = utils.FakeNodeTree()
+        image = node_tree.nodes.new("ShaderNodeTexImage")
+        image.name = "Selected Texture"
+        image.image = SimpleNamespace(filepath="/textures/roughness.png")
+        image.select = True
+
+        context = SimpleNamespace(space_data=SimpleNamespace(node_tree=node_tree), selected_nodes=[image])
+
+        report = convert_selected_nodes.convert_context_selected_nodes(context)
+
+        rm_nodes = utils.find_nodes_by_type(node_tree, "PxrTexture")
+        self.assertEqual(len(rm_nodes), 1)
+        self.assertEqual(rm_nodes[0].filename, "/textures/roughness.png")
+        self.assertTrue(any("Converted 1 selected node" in entry for entry in report))
+
+    def test_convert_context_materials_uses_selected_objects(self) -> None:
+        material = utils.build_fake_material_tree()
+        image = utils.find_first_node_by_type(material.node_tree, "ShaderNodeTexImage")
+        image.image = SimpleNamespace(filepath="/textures/basecolor.png")
+        obj = SimpleNamespace(material_slots=[SimpleNamespace(material=material)])
+        context = SimpleNamespace(selected_objects=[obj], space_data=SimpleNamespace(node_tree=material.node_tree))
+
+        report = convert_material.convert_context_materials(context)
+
+        self.assertTrue(any("created RenderMan material branch" in entry for entry in report))
+
+    def test_convert_world_hdri_creates_dome_light(self) -> None:
+        world = utils.build_fake_world_tree()
+        context = SimpleNamespace(scene=SimpleNamespace(world=world), space_data=SimpleNamespace(node_tree=world.node_tree))
+
+        report = convert_world.convert_context_world(context)
+
+        dome = utils.find_first_node_by_type(world.node_tree, "PxrDomeLight")
+        self.assertIsNotNone(dome)
+        self.assertEqual(dome.lightColorMap, "/tmp/sky.hdr")
+        self.assertEqual(dome.lightRotation, (0.0, 0.5, 1.0))
+        self.assertTrue(any("dome light" in entry for entry in report))
+
+    def test_import_textures_filters_non_images(self) -> None:
+        node_tree = utils.FakeNodeTree()
+        operator = SimpleNamespace(
+            directory="/maps",
+            files=[SimpleNamespace(name="diffuse.png"), SimpleNamespace(name="notes.txt")],
+        )
+        context = SimpleNamespace(space_data=SimpleNamespace(node_tree=node_tree))
+
+        report = import_textures.import_context_textures(context, operator)
+
+        rm_nodes = utils.find_nodes_by_type(node_tree, "PxrTexture")
+        self.assertEqual(len(rm_nodes), 1)
+        self.assertEqual(rm_nodes[0].filename, "/maps/diffuse.png")
+        self.assertTrue(any("Skipped non-image file" in entry for entry in report))
 
 
 if __name__ == "__main__":

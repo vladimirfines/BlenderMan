@@ -11,6 +11,17 @@ try:
 except ImportError:  # pragma: no cover - Blender-only import
     bpy = None
 
+try:
+    from .convert_material import BLENDERMAN_OT_convert_material
+    from .convert_selected_nodes import BLENDERMAN_OT_convert_selected_nodes
+    from .convert_world import BLENDERMAN_OT_convert_world
+    from .import_textures import BLENDERMAN_OT_import_textures
+except ImportError:  # pragma: no cover - import-safe local fallback
+    from convert_material import BLENDERMAN_OT_convert_material  # type: ignore
+    from convert_selected_nodes import BLENDERMAN_OT_convert_selected_nodes  # type: ignore
+    from convert_world import BLENDERMAN_OT_convert_world  # type: ignore
+    from import_textures import BLENDERMAN_OT_import_textures  # type: ignore
+
 
 bl_info = {
     "name": "BlenderMan",
@@ -23,7 +34,12 @@ bl_info = {
 }
 
 
-CLASSES: tuple[type, ...] = ()
+CLASSES: tuple[type, ...] = (
+    BLENDERMAN_OT_convert_material,
+    BLENDERMAN_OT_convert_world,
+    BLENDERMAN_OT_convert_selected_nodes,
+    BLENDERMAN_OT_import_textures,
+)
 
 
 def register() -> None:

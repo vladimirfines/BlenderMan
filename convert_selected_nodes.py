@@ -37,6 +37,9 @@ if bpy is not None:
 
         def execute(self, context: Any) -> set[str]:
             report = convert_context_selected_nodes(context)
+            if utils.report_has_errors(report) and not utils.report_has_info(report):
+                self.report({"ERROR"}, utils.summarize_report(report))
+                return {"CANCELLED"}
             self.report({"INFO"}, utils.summarize_report(report))
             return {"FINISHED"}
 else:

@@ -138,6 +138,41 @@ class UtilsTests(unittest.TestCase):
         self.assertEqual(rm_nodes[0].filename, "/maps/diffuse.png")
         self.assertTrue(any("Skipped non-image file" in entry for entry in report))
 
+    def test_context_has_convertible_materials_uses_active_object(self) -> None:
+        material = SimpleNamespace(name="Mat")
+        active_object = SimpleNamespace(material_slots=[SimpleNamespace(material=material)])
+        context = SimpleNamespace(selected_objects=[], active_object=active_object)
+
+        self.assertTrue(utils.context_has_convertible_materials(context))
+
+    def test_convert_material_reports_missing_renderman_nodes(self) -> None:
+        material = utils.build_fake_material_tree()
+        original_new = material.node_tree.nodes.new
+
+        def failing_new(bl_idname: str):
+            if bl_idname == "PxrSurface":
+                raise RuntimeError("undefined")
+            return original_new(bl_idname)
+
+        material.node_tree.nodes.new = failing_new
+        report = utils.convert_principled_material(material)
+
+        self.assertTrue(any("RenderMan node type PxrSurface is unavailable" in entry for entry in report))
+
+    def test_convert_context_materials_uses_active_object_when_nothing_selected(self) -> None:
+        material = utils.build_fake_material_tree()
+        active_object = SimpleNamespace(material_slots=[SimpleNamespace(material=material)])
+        context = SimpleNamespace(selected_objects=[], active_object=active_object)
+
+        report = convert_material.convert_context_materials(context)
+
+        self.assertTrue(report)
+
+    def test_context_has_world_checks_scene_world(self) -> None:
+        context = SimpleNamespace(scene=SimpleNamespace(world=object()))
+
+        self.assertTrue(utils.context_has_world(context))
+
 
 if __name__ == "__main__":
     unittest.main()

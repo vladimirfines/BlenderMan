@@ -92,6 +92,10 @@ def get_logger(name: str = LOGGER_NAME) -> logging.Logger:
 logger = get_logger()
 
 
+class RendermanNodeError(RuntimeError):
+    """Raised when a required RenderMan node type is unavailable."""
+
+
 def log_debug(message: str, *args: Any) -> None:
     logger.debug(message, *args)
 
@@ -142,6 +146,22 @@ def collect_unique_materials(objects: Iterable[Any]) -> list[Any]:
     materials = list(unique_by_id.values())
     log_debug("Collected %d unique materials", len(materials))
     return materials
+
+
+def get_context_objects(context: Any) -> list[Any]:
+    selected_objects = list(getattr(context, "selected_objects", ()) or ())
+    if selected_objects:
+        return selected_objects
+    active_object = getattr(context, "active_object", None)
+    return [active_object] if active_object is not None else []
+
+
+def context_has_convertible_materials(context: Any) -> bool:
+    return bool(collect_unique_materials(get_context_objects(context)))
+
+
+def context_has_world(context: Any) -> bool:
+    return get_active_world(context) is not None
 
 
 def find_nodes_by_type(node_tree: Any, bl_idname: str) -> list[Any]:
@@ -266,7 +286,12 @@ def create_renderman_node(
         raise ValueError(f"Unsupported Blender node type: {source_type!r}")
 
     log_debug("Creating RenderMan node %s from %s", resolved_type, source_type or resolved_type)
-    node = node_tree.nodes.new(resolved_type)
+    try:
+        node = node_tree.nodes.new(resolved_type)
+    except RuntimeError as exc:
+        raise RendermanNodeError(
+            f"RenderMan node type {resolved_type} is unavailable. Ensure the RenderMan add-on is enabled and exposes this node."
+        ) from exc
     source_name = getattr(blender_node, "name", resolved_type)
     node.name = f"{name_prefix} {source_name}"
     node.label = node.name
@@ -366,6 +391,14 @@ def summarize_report(report: Sequence[str]) -> str:
     return f"{infos or len(report)} actions completed."
 
 
+def report_has_errors(report: Sequence[str]) -> bool:
+    return any(entry.startswith("ERROR:") for entry in report)
+
+
+def report_has_info(report: Sequence[str]) -> bool:
+    return any(entry.startswith("INFO:") for entry in report)
+
+
 def get_selected_shader_nodes(context: Any) -> list[Any]:
     selected_nodes = getattr(context, "selected_nodes", None)
     if selected_nodes is not None:
@@ -422,7 +455,11 @@ def _convert_image_source(
     report: list[str],
     texture_nodes: list[Any],
 ) -> bool:
-    rm_texture = create_renderman_node(node_tree, blender_node=source_node)
+    try:
+        rm_texture = create_renderman_node(node_tree, blender_node=source_node)
+    except RendermanNodeError as exc:
+        report_error(report, str(exc))
+        return False
     copy_image_path(source_node, rm_texture)
     set_texture_colorspace(rm_texture, target_input_name)
     place_relative(rm_texture, source_node, x_offset=320.0)
@@ -445,11 +482,19 @@ def _convert_normal_source(
     utility_nodes: list[Any],
 ) -> bool:
     if getattr(source_node, "bl_idname", None) == "ShaderNodeNormalMap":
-        rm_normal = create_renderman_node(node_tree, blender_node=source_node)
+        try:
+            rm_normal = create_renderman_node(node_tree, blender_node=source_node)
+        except RendermanNodeError as exc:
+            report_error(report, str(exc))
+            return False
         color_socket = get_input_socket(source_node, "Color")
         color_source = trace_socket_source(color_socket) if color_socket is not None else None
         if color_source and getattr(color_source[0], "bl_idname", None) == "ShaderNodeTexImage":
-            rm_texture = create_renderman_node(node_tree, blender_node=color_source[0])
+            try:
+                rm_texture = create_renderman_node(node_tree, blender_node=color_source[0])
+            except RendermanNodeError as exc:
+                report_error(report, str(exc))
+                return False
             copy_image_path(color_source[0], rm_texture)
             set_texture_colorspace(rm_texture, "Normal")
             _link_if_sockets_exist(node_tree, rm_texture, "resultRGB", rm_normal, "inputRGB")
@@ -463,11 +508,19 @@ def _convert_normal_source(
         return True
 
     if getattr(source_node, "bl_idname", None) == "ShaderNodeBump":
-        rm_bump = create_renderman_node(node_tree, blender_node=source_node)
+        try:
+            rm_bump = create_renderman_node(node_tree, blender_node=source_node)
+        except RendermanNodeError as exc:
+            report_error(report, str(exc))
+            return False
         height_socket = get_input_socket(source_node, "Height")
         height_source = trace_socket_source(height_socket) if height_socket is not None else None
         if height_source and getattr(height_source[0], "bl_idname", None) == "ShaderNodeTexImage":
-            rm_texture = create_renderman_node(node_tree, blender_node=height_source[0])
+            try:
+                rm_texture = create_renderman_node(node_tree, blender_node=height_source[0])
+            except RendermanNodeError as exc:
+                report_error(report, str(exc))
+                return False
             copy_image_path(height_source[0], rm_texture)
             set_texture_colorspace(rm_texture, "Height")
             _link_if_sockets_exist(node_tree, rm_texture, "resultA", rm_bump, "inputBump")
@@ -493,8 +546,12 @@ def convert_principled_material(material: Any, report: Optional[list[str]] = Non
         report_error(report, f"{getattr(material, 'name', 'Material')}: no Principled BSDF found")
         return report
 
-    rm_shader = create_renderman_node(node_tree, blender_node=principled)
-    rm_output = create_renderman_node(node_tree, rm_node_type="RendermanOutputNode", name_prefix="RM")
+    try:
+        rm_shader = create_renderman_node(node_tree, blender_node=principled)
+        rm_output = create_renderman_node(node_tree, rm_node_type="RendermanOutputNode", name_prefix="RM")
+    except RendermanNodeError as exc:
+        report_error(report, f"{getattr(material, 'name', 'Material')}: {exc}")
+        return report
     _copy_principled_defaults(principled, rm_shader)
     _link_if_sockets_exist(node_tree, rm_shader, "bxdf_out", rm_output, "bxdf_in")
 
@@ -545,7 +602,11 @@ def convert_selected_nodes(
         if map_rm_node_type(getattr(source_node, "bl_idname", "")) is None:
             report_unsupported(report, f"Selected node not supported: {getattr(source_node, 'name', source_node)}")
             continue
-        rm_node = create_renderman_node(node_tree, blender_node=source_node)
+        try:
+            rm_node = create_renderman_node(node_tree, blender_node=source_node)
+        except RendermanNodeError as exc:
+            report_error(report, str(exc))
+            continue
         copy_image_path(source_node, rm_node)
         if getattr(source_node, "bl_idname", None) == "ShaderNodeTexImage":
             set_texture_colorspace(rm_node, "Base Color")
@@ -571,7 +632,11 @@ def convert_world_hdri(world: Any, report: Optional[list[str]] = None) -> list[s
         report_error(report, f"{getattr(world, 'name', 'World')}: no environment texture found")
         return report
 
-    dome = create_renderman_node(node_tree, rm_node_type="PxrDomeLight", name_prefix="RM")
+    try:
+        dome = create_renderman_node(node_tree, rm_node_type="PxrDomeLight", name_prefix="RM")
+    except RendermanNodeError as exc:
+        report_error(report, f"{getattr(world, 'name', 'World')}: {exc}")
+        return report
     image_path = copy_image_path(environment, dome)
     if image_path:
         set_first_supported_attr(dome, ("lightColorMap", "filename", "filepath"), image_path)
@@ -602,7 +667,11 @@ def import_textures_as_renderman(
         if not is_supported_image_file(filepath):
             report_error(report, f"Skipped non-image file: {filepath}")
             continue
-        texture = create_renderman_node(node_tree, rm_node_type="PxrTexture", name_prefix="RM")
+        try:
+            texture = create_renderman_node(node_tree, rm_node_type="PxrTexture", name_prefix="RM")
+        except RendermanNodeError as exc:
+            report_error(report, str(exc))
+            break
         set_first_supported_attr(texture, ("filename", "filepath"), filepath)
         imported_nodes.append(texture)
     if not imported_nodes:

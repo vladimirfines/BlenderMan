@@ -17,8 +17,7 @@ except ImportError:  # pragma: no cover - local tests import as top-level module
 
 def convert_context_materials(context: Any) -> list[str]:
     report = utils.make_report()
-    selected_objects = getattr(context, "selected_objects", ()) or ()
-    materials = utils.collect_unique_materials(selected_objects)
+    materials = utils.collect_unique_materials(utils.get_context_objects(context))
     if not materials:
         utils.report_error(report, "No materials found on selected objects")
         return report
@@ -36,10 +35,13 @@ if bpy is not None:
 
         @classmethod
         def poll(cls, context: Any) -> bool:
-            return utils.get_shader_node_tree_from_context(context) is not None
+            return utils.context_has_convertible_materials(context)
 
         def execute(self, context: Any) -> set[str]:
             report = convert_context_materials(context)
+            if utils.report_has_errors(report) and not utils.report_has_info(report):
+                self.report({"ERROR"}, utils.summarize_report(report))
+                return {"CANCELLED"}
             self.report({"INFO"}, utils.summarize_report(report))
             return {"FINISHED"}
 else:

@@ -55,6 +55,9 @@ if bpy is not None:
 
         def execute(self, context: Any) -> set[str]:
             report = import_context_textures(context, self)
+            if utils.report_has_errors(report) and not utils.report_has_info(report):
+                self.report({"ERROR"}, utils.summarize_report(report))
+                return {"CANCELLED"}
             self.report({"INFO"}, utils.summarize_report(report))
             return {"FINISHED"}
 else:

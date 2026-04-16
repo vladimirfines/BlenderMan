@@ -29,10 +29,13 @@ if bpy is not None:
 
         @classmethod
         def poll(cls, context: Any) -> bool:
-            return utils.get_shader_node_tree_from_context(context) is not None
+            return utils.context_has_world(context)
 
         def execute(self, context: Any) -> set[str]:
             report = convert_context_world(context)
+            if utils.report_has_errors(report) and not utils.report_has_info(report):
+                self.report({"ERROR"}, utils.summarize_report(report))
+                return {"CANCELLED"}
             self.report({"INFO"}, utils.summarize_report(report))
             return {"FINISHED"}
 else:

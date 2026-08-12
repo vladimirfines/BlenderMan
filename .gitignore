@@ -1,4 +1,13 @@
 # Byte-compiled / optimized files
+# BlenderMan internal documentation and specs
+docs/
+openspec/
+.gemini/
+.cursor/
+.codex/
+.opencode/
+
+# Python artifacts
 __pycache__/
 *.py[cod]
 *$py.class
@@ -129,14 +138,21 @@ cython_debug/
 # Backup files
 *.bak
 *.backup
+*.bat
 
 # Logs
 *.log
 
 # Local development files
-AGENTS.md
 local_dev.py
 test_output/
+docs/
 
 # RenderMan specific (excluded as requested)
 RenderMan_blender_plugin_source/
+
+# Test project
+/TestPrjBlenderMan
+
+# Old versions
+/Old versions

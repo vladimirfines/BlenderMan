@@ -25,27 +25,37 @@ def _collect_import_paths(operator: Any) -> list[str]:
     directory = getattr(operator, "directory", "") or ""
     files = getattr(operator, "files", ()) or ()
     if files:
-        return [os.path.join(directory, entry.name) for entry in files if getattr(entry, "name", "")]
+        return [
+            os.path.join(directory, entry.name)
+            for entry in files
+            if getattr(entry, "name", "")
+        ]
     filepath = getattr(operator, "filepath", "")
     return [filepath] if filepath else []
 
 
 def import_context_textures(context: Any, operator: Any) -> list[str]:
-    report = utils.make_report()
+    """Orchestrate texture import for the current context."""
+    utils.ensure_renderman_engine(context)
     node_tree = utils.get_shader_node_tree_from_context(context)
     if node_tree is None:
-        utils.report_error(report, "No active shader node tree found")
-        return report
-    return utils.import_textures_as_renderman(node_tree, _collect_import_paths(operator), report)
+        return ["ERROR: No active shader node tree found"]
+
+    filepaths = _collect_import_paths(operator)
+    return utils.import_textures_as_renderman(node_tree, filepaths)
 
 
 if bpy is not None:
+
     class BLENDERMAN_OT_import_textures(bpy.types.Operator, ImportHelper):
         bl_idname = "blenderman.import_textures"
         bl_label = "Import Images as RenderMan Textures"
         bl_options = {"REGISTER", "UNDO"}
 
-        filter_glob: StringProperty(default="*.bmp;*.dds;*.exr;*.hdr;*.jpeg;*.jpg;*.png;*.tga;*.tif;*.tiff", options={"HIDDEN"})
+        filter_glob: StringProperty(
+            default="*.bmp;*.dds;*.exr;*.hdr;*.jpeg;*.jpg;*.png;*.tga;*.tif;*.tiff",
+            options={"HIDDEN"},
+        )
         files: CollectionProperty(type=bpy.types.OperatorFileListElement)
         directory: StringProperty(subtype="DIR_PATH")
 
@@ -61,5 +71,6 @@ if bpy is not None:
             self.report({"INFO"}, utils.summarize_report(report))
             return {"FINISHED"}
 else:
+
     class BLENDERMAN_OT_import_textures:  # pragma: no cover - import-safe fallback
         pass

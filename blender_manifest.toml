@@ -1,0 +1,21 @@
+schema_version = "1.0.0"
+
+id = "blenderman"
+version = "0.1.1"
+name = "BlenderMan"
+tagline = "Convert Cycles PBR node setups to RenderMan-ready branches"
+maintainer = "Vladimir Fines"
+type = "add-on"
+
+website = "https://github.com/vladimirfines/blenderman"
+tags = ["Render", "Shader", "Nodes"]
+
+blender_version_min = "4.2.0"
+
+license = [
+  "SPDX:GPL-3.0-or-later",
+]
+
+copyright = [
+  "2026 Vladimir Fines",
+]

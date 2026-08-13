@@ -16,16 +16,21 @@ except ImportError:  # pragma: no cover - local tests import as top-level module
 
 
 def convert_context_selected_nodes(context: Any) -> list[str]:
-    report = utils.make_report()
+    """Orchestrate selected-node conversion for the current context."""
+    utils.ensure_renderman_engine(context)
     node_tree = utils.get_shader_node_tree_from_context(context)
     if node_tree is None:
-        utils.report_error(report, "No active shader node tree found")
-        return report
+        return ["ERROR: No active shader node tree found"]
+
     selected_nodes = utils.get_selected_shader_nodes(context)
-    return utils.convert_selected_nodes(node_tree, selected_nodes, report)
+    if not selected_nodes:
+        return ["ERROR: No nodes selected"]
+
+    return utils.convert_selected_nodes(node_tree, selected_nodes)
 
 
 if bpy is not None:
+
     class BLENDERMAN_OT_convert_selected_nodes(bpy.types.Operator):
         bl_idname = "blenderman.convert_selected_nodes"
         bl_label = "Convert Selected Nodes"
@@ -43,5 +48,6 @@ if bpy is not None:
             self.report({"INFO"}, utils.summarize_report(report))
             return {"FINISHED"}
 else:
+
     class BLENDERMAN_OT_convert_selected_nodes:  # pragma: no cover - import-safe fallback
         pass

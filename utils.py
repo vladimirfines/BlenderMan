@@ -1,4 +1,4 @@
-"""Shared helpers for the BlenderMan add-on.
+"""Shared  utils for the BlenderMan add-on.
 
 The module is import-safe outside Blender so the pure graph logic can be tested
 locally. Functions that need a live Blender/Renderman environment fail with a
@@ -9,8 +9,6 @@ from __future__ import annotations
 
 import logging
 import os
-from dataclasses import dataclass, field
-from types import SimpleNamespace
 from typing import Any, Iterable, Iterator, Optional, Sequence
 
 try:
@@ -20,25 +18,77 @@ except ImportError:  # pragma: no cover - Blender-only import
 
 
 LOGGER_NAME = "Blenderman"
-DEFAULT_COLUMN_GAP = 260
-DEFAULT_ROW_GAP = 140
+DEFAULT_COLUMN_GAP = 300
+DEFAULT_ROW_GAP = 400
+
+NODE_HEIGHTS = {
+    "PxrTexture": 350,
+    "PxrNormalMap": 350,
+    "PxrBump": 350,
+    "PxrDisneyBsdf": 500,
+    "RendermanOutputNode": 500,
+    "PxrDisplace": 350,
+    "PxrDomeLight": 500,
+}
+
+NODE_GAP = 10
+NODE_START_X = 1000
+
+
+def get_node_height(bl_idname: str) -> int:
+    """Get the height of a RenderMan node type for positioning."""
+    # Try direct match
+    if bl_idname in NODE_HEIGHTS:
+        return NODE_HEIGHTS[bl_idname]
+
+    # Try matching by checking if canonical name is part of the bl_idname
+    for canonical, height in NODE_HEIGHTS.items():
+        if canonical in bl_idname:
+            return height
+
+    return 300
+
+
+def convert_materials(materials: Iterable[Any], report: Optional[list[str]] = None) -> list[str]:
+    """Convert multiple materials to RenderMan."""
+    if report is None:
+        report = make_report()
+    for material in materials:
+        convert_principled_material(material, report=report)
+    return report
+
+
+def position_node(node: Any, x: float, y: float) -> None:
+    """Set node position."""
+    node.location = (x, y)
+
+
+def position_nodes_vertically(nodes: list[Any], start_x: float, start_y: float) -> None:
+    """Position nodes vertically with calculated gaps."""
+    current_y = start_y
+    for node in nodes:
+        height = get_node_height(getattr(node, "bl_idname", ""))
+        node.location = (start_x, current_y)
+        current_y -= height + NODE_GAP
+
 
 NODE_TYPE_MAP = {
     "ShaderNodeTexImage": "PxrTexture",
     "ShaderNodeNormalMap": "PxrNormalMap",
     "ShaderNodeBump": "PxrBump",
     "ShaderNodeDisplacement": "PxrDisplace",
-    "ShaderNodeBsdfPrincipled": "PxrSurface",
+    "ShaderNodeTexEnvironment": "PxrDomeLight",
+    "ShaderNodeBsdfPrincipled": "PxrDisneyBsdf",
     "ShaderNodeOutputMaterial": "RendermanOutputNode",
 }
 
 SOCKET_NAME_MAP = {
-    "Base Color": "diffuseColor",
+    "Base Color": "baseColor",
     "Subsurface": "subsurfaceGain",
     "Subsurface Radius": "subsurfaceRadius",
-    "Metallic": "specularFaceColor",
+    "Metallic": "metallic",
     "Specular IOR Level": "specularIor",
-    "Roughness": "specularRoughness",
+    "Roughness": "roughness",
     "Emission Color": "emitColor",
     "Emission Strength": "emitGain",
     "Alpha": "presence",
@@ -115,6 +165,19 @@ def map_rm_socket_name(socket_name: str) -> Optional[str]:
     return SOCKET_NAME_MAP.get(socket_name)
 
 
+def get_rman_node_type(rman_name: str) -> str:
+    """Get actual Blender node class name from __BL_NODES_MAP__."""
+    try:
+        import RenderManForBlender.rman_bl_nodes as rman_bl_nodes  # type: ignore
+
+        mapped = rman_bl_nodes.__BL_NODES_MAP__.get(rman_name)
+        if mapped:
+            return mapped
+    except ImportError:
+        pass
+    return rman_name
+
+
 def ensure_nodes_enabled(owner: Any) -> Any:
     """Enable nodes on a material/world-like owner and return its node tree."""
     if getattr(owner, "use_nodes", False) is False:
@@ -165,7 +228,11 @@ def context_has_world(context: Any) -> bool:
 
 
 def find_nodes_by_type(node_tree: Any, bl_idname: str) -> list[Any]:
-    return [node for node in getattr(node_tree, "nodes", ()) if getattr(node, "bl_idname", None) == bl_idname]
+    return [
+        node
+        for node in getattr(node_tree, "nodes", ())
+        if getattr(node, "bl_idname", None) == bl_idname
+    ]
 
 
 def find_first_node_by_type(node_tree: Any, bl_idname: str) -> Optional[Any]:
@@ -177,7 +244,10 @@ def find_first_node_by_type(node_tree: Any, bl_idname: str) -> Optional[Any]:
 
 def find_material_output(node_tree: Any, target: str = "ALL") -> Optional[Any]:
     for node in find_nodes_by_type(node_tree, "ShaderNodeOutputMaterial"):
-        if getattr(node, "is_active_output", True) and target in {"ALL", getattr(node, "target", "ALL")}:
+        if getattr(node, "is_active_output", True) and target in {
+            "ALL",
+            getattr(node, "target", "ALL"),
+        }:
             return node
     outputs = find_nodes_by_type(node_tree, "ShaderNodeOutputMaterial")
     return outputs[0] if outputs else None
@@ -192,7 +262,10 @@ def find_environment_texture(node_tree: Any) -> Optional[Any]:
     if background is not None:
         color_socket = get_input_socket(background, "Color")
         source = trace_socket_source(color_socket) if color_socket is not None else None
-        if source and getattr(source[0], "bl_idname", None) == "ShaderNodeTexEnvironment":
+        if (
+            source
+            and getattr(source[0], "bl_idname", None) == "ShaderNodeTexEnvironment"
+        ):
             return source[0]
     return find_first_node_by_type(node_tree, "ShaderNodeTexEnvironment")
 
@@ -268,9 +341,57 @@ def find_linked_principled(node_tree: Any) -> Optional[Any]:
     if output is not None:
         surface_socket = get_input_socket(output, "Surface")
         source = trace_socket_source(surface_socket) if surface_socket else None
-        if source and getattr(source[0], "bl_idname", None) == "ShaderNodeBsdfPrincipled":
+        if (
+            source
+            and getattr(source[0], "bl_idname", None) == "ShaderNodeBsdfPrincipled"
+        ):
             return source[0]
     return find_first_node_by_type(node_tree, "ShaderNodeBsdfPrincipled")
+
+
+def get_render_engine(context: Any) -> Optional[str]:
+    scene = getattr(context, "scene", None)
+    if scene is None:
+        return None
+    rd = getattr(scene, "render", None)
+    if rd is None:
+        return None
+    return getattr(rd, "engine", None)
+
+
+def set_render_engine(context: Any, engine: str = "PRMAN_RENDER") -> bool:
+    scene = getattr(context, "scene", None)
+    if scene is None:
+        return False
+    rd = getattr(scene, "render", None)
+    if rd is None:
+        return False
+    try:
+        rd.engine = engine
+        return True
+    except (AttributeError, TypeError):
+        return False
+
+
+def check_renderman_available(context: Any) -> tuple[bool, Optional[str]]:
+    """Check if RenderMan nodes can be created in this context."""
+    engine = get_render_engine(context)
+    if engine is None:
+        return False, "Cannot determine render engine"
+    if engine != "PRMAN_RENDER":
+        return (
+            False,
+            f"Render engine is '{engine}', must be 'PRMAN_RENDER' to create RenderMan nodes",
+        )
+    return True, None
+
+
+def ensure_renderman_engine(context: Any) -> bool:
+    """Ensure the render engine is set to PRMAN_RENDER for node creation."""
+    available, _ = check_renderman_available(context)
+    if available:
+        return True
+    return set_render_engine(context, "PRMAN_RENDER")
 
 
 def create_renderman_node(
@@ -278,17 +399,33 @@ def create_renderman_node(
     blender_node: Optional[Any] = None,
     rm_node_type: Optional[str] = None,
     name_prefix: str = "RM",
+    context: Any = None,
 ) -> Any:
     """Create a RenderMan node from an explicit type or a Blender node mapping."""
-    source_type = getattr(blender_node, "bl_idname", None) if blender_node is not None else None
+    source_type = (
+        getattr(blender_node, "bl_idname", None) if blender_node is not None else None
+    )
     resolved_type = rm_node_type or map_rm_node_type(source_type or "")
     if not resolved_type:
         raise ValueError(f"Unsupported Blender node type: {source_type!r}")
 
-    log_debug("Creating RenderMan node %s from %s", resolved_type, source_type or resolved_type)
+    resolved_type = get_rman_node_type(resolved_type)
+
+    log_debug(
+        "Creating RenderMan node %s from %s",
+        resolved_type,
+        source_type or resolved_type,
+    )
     try:
         node = node_tree.nodes.new(resolved_type)
     except RuntimeError as exc:
+        error_msg = str(exc)
+        if context is not None:
+            available, hint = check_renderman_available(context)
+            if not available:
+                raise RendermanNodeError(
+                    f"RenderMan node type {resolved_type} is unavailable. {hint}. Ensure the RenderMan add-on is enabled."
+                ) from exc
         raise RendermanNodeError(
             f"RenderMan node type {resolved_type} is unavailable. Ensure the RenderMan add-on is enabled and exposes this node."
         ) from exc
@@ -302,7 +439,9 @@ def set_texture_colorspace(texture_node: Any, input_name: str) -> None:
     """Apply the RenderMan data-vs-color colorspace hint when supported."""
     classification = classify_input_socket(input_name)
     if hasattr(texture_node, "filename_colorspace"):
-        texture_node.filename_colorspace = "data" if classification == "data" else "srgb"
+        texture_node.filename_colorspace = (
+            "data" if classification == "data" else "srgb"
+        )
 
 
 def link_sockets(node_tree: Any, from_socket: Any, to_socket: Any) -> Any:
@@ -323,7 +462,9 @@ def set_attr_if_present(target: Any, attr_name: str, value: Any) -> bool:
         return True
 
 
-def set_first_supported_attr(target: Any, attr_names: Sequence[str], value: Any) -> Optional[str]:
+def set_first_supported_attr(
+    target: Any, attr_names: Sequence[str], value: Any
+) -> Optional[str]:
     for attr_name in attr_names:
         if set_attr_if_present(target, attr_name, value):
             return attr_name
@@ -336,14 +477,18 @@ def copy_image_path(source_node: Any, target_node: Any) -> Optional[str]:
     image_path = image_path or getattr(source_node, "filepath", None)
     if not image_path:
         return None
-    set_first_supported_attr(target_node, ("filename", "lightColorMap", "filepath"), image_path)
+    set_first_supported_attr(
+        target_node, ("filename", "lightColorMap", "filepath"), image_path
+    )
     return image_path
 
 
 def copy_default_value(source_socket: Any, target_socket: Any) -> bool:
     if source_socket is None or target_socket is None:
         return False
-    if not hasattr(source_socket, "default_value") or not hasattr(target_socket, "default_value"):
+    if not hasattr(source_socket, "default_value") or not hasattr(
+        target_socket, "default_value"
+    ):
         return False
     target_socket.default_value = source_socket.default_value
     return True
@@ -359,7 +504,9 @@ def _coerce_location(location: Any) -> tuple[float, float]:
     return (0.0, 0.0)
 
 
-def place_relative(node: Any, source_node: Any, x_offset: float = 320.0, y_offset: float = 0.0) -> None:
+def place_relative(
+    node: Any, source_node: Any, x_offset: float = 320.0, y_offset: float = 0.0
+) -> None:
     source_x, source_y = _coerce_location(getattr(source_node, "location", None))
     node.location = (source_x + x_offset, source_y + y_offset)
 
@@ -407,7 +554,11 @@ def get_selected_shader_nodes(context: Any) -> list[Any]:
     node_tree = getattr(space_data, "node_tree", None)
     if node_tree is None:
         return []
-    return [node for node in getattr(node_tree, "nodes", ()) if getattr(node, "select", False)]
+    return [
+        node
+        for node in getattr(node_tree, "nodes", ())
+        if getattr(node, "select", False)
+    ]
 
 
 def get_shader_node_tree_from_context(context: Any) -> Optional[Any]:
@@ -438,7 +589,9 @@ def _copy_principled_defaults(principled: Any, rm_shader: Any) -> None:
                 set_attr_if_present(rm_shader, target_name, value)
 
 
-def _link_if_sockets_exist(node_tree: Any, from_node: Any, from_name: str, to_node: Any, to_name: str) -> bool:
+def _link_if_sockets_exist(
+    node_tree: Any, from_node: Any, from_name: str, to_node: Any, to_name: str
+) -> bool:
     from_socket = get_output_socket(from_node, from_name)
     to_socket = get_input_socket(to_node, to_name)
     if from_socket is None or to_socket is None:
@@ -463,12 +616,18 @@ def _convert_image_source(
     copy_image_path(source_node, rm_texture)
     set_texture_colorspace(rm_texture, target_input_name)
     place_relative(rm_texture, source_node, x_offset=320.0)
-    linked = _link_if_sockets_exist(node_tree, rm_texture, "resultRGB", target_node, target_input_name)
+    linked = _link_if_sockets_exist(
+        node_tree, rm_texture, "resultRGB", target_node, target_input_name
+    )
     if not linked:
-        linked = _link_if_sockets_exist(node_tree, rm_texture, "resultA", target_node, target_input_name)
+        linked = _link_if_sockets_exist(
+            node_tree, rm_texture, "resultA", target_node, target_input_name
+        )
     texture_nodes.append(rm_texture)
     if not linked:
-        report_error(report, f"Could not wire RenderMan texture into {target_input_name}")
+        report_error(
+            report, f"Could not wire RenderMan texture into {target_input_name}"
+        )
         return False
     return True
 
@@ -488,21 +647,32 @@ def _convert_normal_source(
             report_error(report, str(exc))
             return False
         color_socket = get_input_socket(source_node, "Color")
-        color_source = trace_socket_source(color_socket) if color_socket is not None else None
-        if color_source and getattr(color_source[0], "bl_idname", None) == "ShaderNodeTexImage":
+        color_source = (
+            trace_socket_source(color_socket) if color_socket is not None else None
+        )
+        if (
+            color_source
+            and getattr(color_source[0], "bl_idname", None) == "ShaderNodeTexImage"
+        ):
             try:
-                rm_texture = create_renderman_node(node_tree, blender_node=color_source[0])
+                rm_texture = create_renderman_node(
+                    node_tree, blender_node=color_source[0]
+                )
             except RendermanNodeError as exc:
                 report_error(report, str(exc))
                 return False
             copy_image_path(color_source[0], rm_texture)
             set_texture_colorspace(rm_texture, "Normal")
-            _link_if_sockets_exist(node_tree, rm_texture, "resultRGB", rm_normal, "inputRGB")
+            _link_if_sockets_exist(
+                node_tree, rm_texture, "resultRGB", rm_normal, "inputRGB"
+            )
             texture_nodes.append(rm_texture)
             place_relative(rm_texture, color_source[0], x_offset=320.0)
         place_relative(rm_normal, source_node, x_offset=320.0)
         utility_nodes.append(rm_normal)
-        if not _link_if_sockets_exist(node_tree, rm_normal, "resultN", target_node, "bumpNormal"):
+        if not _link_if_sockets_exist(
+            node_tree, rm_normal, "resultN", target_node, "bumpNormal"
+        ):
             report_error(report, "Could not wire RenderMan normal map into bumpNormal")
             return False
         return True
@@ -514,41 +684,61 @@ def _convert_normal_source(
             report_error(report, str(exc))
             return False
         height_socket = get_input_socket(source_node, "Height")
-        height_source = trace_socket_source(height_socket) if height_socket is not None else None
-        if height_source and getattr(height_source[0], "bl_idname", None) == "ShaderNodeTexImage":
+        height_source = (
+            trace_socket_source(height_socket) if height_socket is not None else None
+        )
+        if (
+            height_source
+            and getattr(height_source[0], "bl_idname", None) == "ShaderNodeTexImage"
+        ):
             try:
-                rm_texture = create_renderman_node(node_tree, blender_node=height_source[0])
+                rm_texture = create_renderman_node(
+                    node_tree, blender_node=height_source[0]
+                )
             except RendermanNodeError as exc:
                 report_error(report, str(exc))
                 return False
             copy_image_path(height_source[0], rm_texture)
             set_texture_colorspace(rm_texture, "Height")
-            _link_if_sockets_exist(node_tree, rm_texture, "resultA", rm_bump, "inputBump")
+            _link_if_sockets_exist(
+                node_tree, rm_texture, "resultA", rm_bump, "inputBump"
+            )
             texture_nodes.append(rm_texture)
             place_relative(rm_texture, height_source[0], x_offset=320.0)
         place_relative(rm_bump, source_node, x_offset=320.0)
         utility_nodes.append(rm_bump)
-        if not _link_if_sockets_exist(node_tree, rm_bump, "resultN", target_node, "bumpNormal"):
+        if not _link_if_sockets_exist(
+            node_tree, rm_bump, "resultN", target_node, "bumpNormal"
+        ):
             report_error(report, "Could not wire RenderMan bump node into bumpNormal")
             return False
         return True
 
-    report_unsupported(report, f"Unsupported normal source node: {getattr(source_node, 'bl_idname', 'unknown')}")
+    report_unsupported(
+        report,
+        f"Unsupported normal source node: {getattr(source_node, 'bl_idname', 'unknown')}",
+    )
     return False
 
 
-def convert_principled_material(material: Any, report: Optional[list[str]] = None) -> list[str]:
+def convert_principled_material(
+    material: Any, report: Optional[list[str]] = None
+) -> list[str]:
     if report is None:
         report = make_report()
     node_tree = ensure_nodes_enabled(material)
     principled = find_linked_principled(node_tree)
     if principled is None:
-        report_error(report, f"{getattr(material, 'name', 'Material')}: no Principled BSDF found")
+        report_error(
+            report, f"{getattr(material, 'name', 'Material')}: no Principled BSDF found"
+        )
         return report
 
     try:
         rm_shader = create_renderman_node(node_tree, blender_node=principled)
-        rm_output = create_renderman_node(node_tree, rm_node_type="RendermanOutputNode", name_prefix="RM")
+        rm_output = create_renderman_node(
+            node_tree, rm_node_type="RendermanOutputNode", name_prefix="RM"
+        )
     except RendermanNodeError as exc:
         report_error(report, f"{getattr(material, 'name', 'Material')}: {exc}")
         return report
@@ -557,26 +747,37 @@ def convert_principled_material(material: Any, report: Optional[list[str]] = Non
 
     texture_nodes: list[Any] = []
     utility_nodes: list[Any] = []
-    handled_inputs = ("Base Color", "Roughness", "Metallic")
+    handled_inputs = ("Base Color", "Roughness", "Metallic", "Emission Color")
 
     for input_name in handled_inputs:
         source_socket = get_input_socket(principled, input_name)
-        source = trace_socket_source(source_socket) if source_socket is not None else None
+        source = (
+            trace_socket_source(source_socket) if source_socket is not None else None
+        )
         if source is None:
             continue
         source_node, _ = source
         if getattr(source_node, "bl_idname", None) != "ShaderNodeTexImage":
-            report_unsupported(report, f"{getattr(material, 'name', 'Material')}: unsupported source for {input_name}")
+            report_unsupported(
+                report,
+                f"{getattr(material, 'name', 'Material')}: unsupported source for {input_name}",
+            )
             continue
         target_input = map_rm_socket_name(input_name)
         if target_input is None:
             continue
-        _convert_image_source(node_tree, source_node, rm_shader, target_input, report, texture_nodes)
+        _convert_image_source(
+            node_tree, source_node, rm_shader, target_input, report, texture_nodes
+        )
 
     normal_socket = get_input_socket(principled, "Normal")
-    normal_source = trace_socket_source(normal_socket) if normal_socket is not None else None
+    normal_source = (
+        trace_socket_source(normal_socket) if normal_socket is not None else None
+    )
     if normal_source is not None:
-        _convert_normal_source(node_tree, normal_source[0], rm_shader, report, texture_nodes, utility_nodes)
+        _convert_normal_source(
+            node_tree, normal_source[0], rm_shader, report, texture_nodes, utility_nodes
+        )
 
     origin_x, origin_y = _coerce_location(getattr(principled, "location", None))
     layout_renderman_branch(
@@ -586,7 +787,10 @@ def convert_principled_material(material: Any, report: Optional[list[str]] = Non
         rm_output,
         origin=(origin_x, origin_y - 360.0),
     )
-    report_info(report, f"{getattr(material, 'name', 'Material')}: created RenderMan material branch")
+    report_info(
+        report,
+        f"{getattr(material, 'name', 'Material')}: created RenderMan material branch",
+    )
     return report
 
 
@@ -600,7 +804,10 @@ def convert_selected_nodes(
     converted = 0
     for source_node in selected_nodes:
         if map_rm_node_type(getattr(source_node, "bl_idname", "")) is None:
-            report_unsupported(report, f"Selected node not supported: {getattr(source_node, 'name', source_node)}")
+            report_unsupported(
+                report,
+                f"Selected node not supported: {getattr(source_node, 'name', source_node)}",
+            )
             continue
         try:
             rm_node = create_renderman_node(node_tree, blender_node=source_node)
@@ -610,6 +817,11 @@ def convert_selected_nodes(
         copy_image_path(source_node, rm_node)
         if getattr(source_node, "bl_idname", None) == "ShaderNodeTexImage":
             set_texture_colorspace(rm_node, "Base Color")
+        elif getattr(source_node, "bl_idname", None) == "ShaderNodeTexEnvironment":
+            image_path = getattr(getattr(source_node, "image", None), "filepath", None)
+            if image_path:
+                set_attr_if_present(rm_node, "lightColorMap", image_path)
+
         place_relative(rm_node, source_node, x_offset=320.0)
         converted += 1
     if converted == 0:
@@ -617,6 +829,24 @@ def convert_selected_nodes(
         return report
     report_info(report, f"Converted {converted} selected node(s) into RenderMan nodes")
     return report
+
+
+def find_created_rman_light(light_type: str) -> Optional[Any]:
+    """Search for a recently created RenderMan light object by type."""
+    # Preference 1: Look for LIGHT type objects with the right rman_light type
+    for obj in getattr(bpy.data, "objects", ()):
+        if getattr(obj, "type", None) == "LIGHT":
+            data = getattr(obj, "data", None)
+            if data is not None:
+                for light in getattr(data, "rman_lights", ()):
+                    if light_type in str(light):
+                        return obj
+
+    # Preference 2: Fallback to name search
+    for obj in getattr(bpy.data, "objects", ()):
+        if light_type in obj.name:
+            return obj
+    return None
 
 
 def convert_world_hdri(world: Any, report: Optional[list[str]] = None) -> list[str]:
@@ -629,29 +859,57 @@ def convert_world_hdri(world: Any, report: Optional[list[str]] = None) -> list[s
     node_tree = ensure_nodes_enabled(world)
     environment = find_environment_texture(node_tree)
     if environment is None:
-        report_error(report, f"{getattr(world, 'name', 'World')}: no environment texture found")
+        report_error(
+            report, f"{getattr(world, 'name', 'World')}: no environment texture found"
+        )
         return report
 
-    try:
-        dome = create_renderman_node(node_tree, rm_node_type="PxrDomeLight", name_prefix="RM")
-    except RendermanNodeError as exc:
-        report_error(report, f"{getattr(world, 'name', 'World')}: {exc}")
+    image = getattr(environment, "image", None)
+    filepath = (
+        getattr(image, "filepath", None) if image is not None else None
+    ) or getattr(environment, "filepath", None)
+    if not filepath:
+        report_error(report, "Environment texture has no image path")
         return report
-    image_path = copy_image_path(environment, dome)
-    if image_path:
-        set_first_supported_attr(dome, ("lightColorMap", "filename", "filepath"), image_path)
-    mapping = find_first_node_by_type(node_tree, "ShaderNodeMapping")
-    rotation = None
-    if mapping is not None:
-        rotation_socket = get_input_socket(mapping, "Rotation")
-        rotation = _get_socket_default_or_value(rotation_socket)
-    if rotation is not None:
-        set_first_supported_attr(dome, ("lightRotation", "orientation", "rotation"), rotation)
-    place_relative(dome, environment, x_offset=420.0)
-    if image_path:
-        report_info(report, f"{getattr(world, 'name', 'World')}: created RenderMan dome light for {image_path}")
-    else:
-        report_info(report, f"{getattr(world, 'name', 'World')}: created RenderMan dome light")
+
+    # Use RenderMan operator to create the light object
+    try:
+        bpy.ops.object.rman_add_light(rman_light_name="PxrDomeLight")
+    except Exception as exc:
+        report_error(report, f"Failed to create PxrDomeLight: {exc}")
+        return report
+
+    light_obj = find_created_rman_light("PxrDomeLight")
+    if light_obj is None:
+        report_error(report, "Could not find created PxrDomeLight object")
+        return report
+
+    light_data = getattr(light_obj, "data", None)
+    if light_data is not None:
+        # Set viewport draw texture to False
+        rman_props = getattr(light_data, "renderman", None)
+        if rman_props is not None:
+            set_attr_if_present(rman_props, "rman_vp_draw_texture", False)
+
+        nt = getattr(light_data, "node_tree", None)
+        if nt is not None:
+            for node in getattr(nt, "nodes", []):
+                if "PxrDomeLight" in getattr(node, "bl_idname", ""):
+                    set_attr_if_present(node, "lightColorMap", filepath)
+
+                    # Also handle rotation
+                    mapping = find_first_node_by_type(node_tree, "ShaderNodeMapping")
+                    if mapping is not None:
+                        rotation_socket = get_input_socket(mapping, "Rotation")
+                        rotation = _get_socket_default_or_value(rotation_socket)
+                        if rotation is not None:
+                            set_attr_if_present(node, "lightRotation", rotation)
+                    break
+
+    report_info(
+        report,
+        f"{getattr(world, 'name', 'World')}: created PxrDomeLight for {os.path.basename(filepath)}",
+    )
     return report
 
 
@@ -668,7 +926,9 @@ def import_textures_as_renderman(
             report_error(report, f"Skipped non-image file: {filepath}")
             continue
         try:
-            texture = create_renderman_node(node_tree, rm_node_type="PxrTexture", name_prefix="RM")
+            texture = create_renderman_node(
+                node_tree, rm_node_type="PxrTexture", name_prefix="RM"
+            )
         except RendermanNodeError as exc:
             report_error(report, str(exc))
             break
@@ -678,18 +938,22 @@ def import_textures_as_renderman(
         report_error(report, "No images were imported as RenderMan textures")
         return report
     layout_renderman_branch(imported_nodes, [], None, None, origin=(0.0, 0.0))
-    report_info(report, f"Imported {len(imported_nodes)} image(s) as RenderMan textures")
+    report_info(
+        report, f"Imported {len(imported_nodes)} image(s) as RenderMan textures"
+    )
     return report
 
 
-def _node_height(node: Any, default: float = 100.0) -> float:
+def _node_height(node: Any, default: float = 300.0) -> float:
     dimensions = getattr(node, "dimensions", None)
-    if dimensions and len(dimensions) > 1:
-        return float(dimensions[1]) or default
-    return float(getattr(node, "height", default) or default)
+    if dimensions and len(dimensions) > 1 and dimensions[1] > 1.0:
+        return float(dimensions[1])
+    return float(get_node_height(getattr(node, "bl_idname", "")))
 
 
-def place_column(nodes: Sequence[Any], x: float, y_start: float, y_step: float = DEFAULT_ROW_GAP) -> None:
+def place_column(
+    nodes: Sequence[Any], x: float, y_start: float, y_step: float = DEFAULT_ROW_GAP
+) -> None:
     y = y_start
     for node in nodes:
         node.location = (x, y)
@@ -722,120 +986,3 @@ def report_unsupported(report: list[str], message: str) -> None:
 
 def make_report() -> list[str]:
     return []
-
-
-@dataclass
-class FakeSocket:
-    name: str
-    node: Any | None = None
-    links: list[Any] = field(default_factory=list)
-
-
-@dataclass
-class FakeLink:
-    from_socket: FakeSocket
-    to_socket: FakeSocket
-
-    @property
-    def from_node(self) -> Any | None:
-        return self.from_socket.node
-
-    @property
-    def to_node(self) -> Any | None:
-        return self.to_socket.node
-
-
-class FakeSocketMap(dict):
-    def __iter__(self) -> Iterator[FakeSocket]:
-        return iter(self.values())
-
-
-class FakeNode:
-    def __init__(
-        self,
-        bl_idname: str,
-        name: Optional[str] = None,
-        inputs: Optional[Sequence[str]] = None,
-        outputs: Optional[Sequence[str]] = None,
-    ) -> None:
-        self.bl_idname = bl_idname
-        self.name = name or bl_idname
-        self.label = self.name
-        self.inputs = FakeSocketMap({socket_name: FakeSocket(socket_name, self) for socket_name in inputs or ()})
-        self.outputs = FakeSocketMap({socket_name: FakeSocket(socket_name, self) for socket_name in outputs or ()})
-        self.location = (0.0, 0.0)
-        self.dimensions = (160.0, 100.0)
-        self.is_active_output = True
-        self.target = "ALL"
-
-
-class FakeNodeCollection(list):
-    def new(self, bl_idname: str) -> FakeNode:
-        default_sockets = {
-            "ShaderNodeTexImage": ((), ("Color", "Alpha")),
-            "ShaderNodeTexEnvironment": ((), ("Color",)),
-            "ShaderNodeBackground": (("Color", "Strength"), ("Background",)),
-            "ShaderNodeMapping": (("Vector", "Location", "Rotation", "Scale"), ("Vector",)),
-            "ShaderNodeNormalMap": (("Color",), ("Normal",)),
-            "ShaderNodeBump": (("Height", "Normal"), ("Normal",)),
-            "ShaderNodeBsdfPrincipled": (
-                ("Base Color", "Roughness", "Metallic", "Normal"),
-                ("BSDF",),
-            ),
-            "ShaderNodeOutputMaterial": (("Surface", "Displacement"), ()),
-            "ShaderNodeOutputWorld": (("Surface",), ()),
-            "PxrTexture": ((), ("resultRGB", "resultA")),
-            "PxrNormalMap": (("inputRGB",), ("resultN",)),
-            "PxrBump": (("inputBump", "inputN"), ("resultN",)),
-            "PxrSurface": (
-                ("diffuseColor", "specularRoughness", "specularFaceColor", "bumpNormal"),
-                ("bxdf_out",),
-            ),
-            "RendermanOutputNode": (("bxdf_in", "displace_in"), ()),
-            "PxrDisplace": (("dispScalar",), ("displace_out",)),
-            "PxrDomeLight": ((), ()),
-        }
-        inputs, outputs = default_sockets.get(bl_idname, ((), ()))
-        node = FakeNode(bl_idname, inputs=inputs, outputs=outputs)
-        self.append(node)
-        return node
-
-
-class FakeLinkCollection(list):
-    def new(self, from_socket: FakeSocket, to_socket: FakeSocket) -> FakeLink:
-        link = FakeLink(from_socket=from_socket, to_socket=to_socket)
-        self.append(link)
-        from_socket.links.append(link)
-        to_socket.links.append(link)
-        return link
-
-
-class FakeNodeTree:
-    def __init__(self) -> None:
-        self.nodes = FakeNodeCollection()
-        self.links = FakeLinkCollection()
-
-
-def build_fake_material_tree() -> SimpleNamespace:
-    """Create a Node Wrangler-like test graph for local tests."""
-    node_tree = FakeNodeTree()
-    image = node_tree.nodes.new("ShaderNodeTexImage")
-    image.name = "Base Color"
-    principled = node_tree.nodes.new("ShaderNodeBsdfPrincipled")
-    output = node_tree.nodes.new("ShaderNodeOutputMaterial")
-    node_tree.links.new(image.outputs["Color"], principled.inputs["Base Color"])
-    node_tree.links.new(principled.outputs["BSDF"], output.inputs["Surface"])
-    return SimpleNamespace(use_nodes=True, node_tree=node_tree, name="TestMaterial")
-
-
-def build_fake_world_tree() -> SimpleNamespace:
-    node_tree = FakeNodeTree()
-    environment = node_tree.nodes.new("ShaderNodeTexEnvironment")
-    environment.image = SimpleNamespace(filepath="/tmp/sky.hdr")
-    background = node_tree.nodes.new("ShaderNodeBackground")
-    output = node_tree.nodes.new("ShaderNodeOutputWorld")
-    mapping = node_tree.nodes.new("ShaderNodeMapping")
-    mapping.inputs["Rotation"].default_value = (0.0, 0.5, 1.0)
-    node_tree.links.new(environment.outputs["Color"], background.inputs["Color"])
-    node_tree.links.new(background.outputs["Background"], output.inputs["Surface"])
-    return SimpleNamespace(use_nodes=True, node_tree=node_tree, name="TestWorld")

@@ -16,12 +16,13 @@ except ImportError:  # pragma: no cover - local tests import as top-level module
 
 
 def convert_context_world(context: Any) -> list[str]:
-    report = utils.make_report()
-    world = utils.get_active_world(context)
-    return utils.convert_world_hdri(world, report)
+    """Orchestrate world conversion for the current context."""
+    utils.ensure_renderman_engine(context)
+    return utils.convert_world_hdri(utils.get_active_world(context))
 
 
 if bpy is not None:
+
     class BLENDERMAN_OT_convert_world(bpy.types.Operator):
         bl_idname = "blenderman.convert_world"
         bl_label = "Convert HDRI Map"
@@ -39,5 +40,6 @@ if bpy is not None:
             self.report({"INFO"}, utils.summarize_report(report))
             return {"FINISHED"}
 else:
+
     class BLENDERMAN_OT_convert_world:  # pragma: no cover - import-safe fallback
         pass

@@ -16,18 +16,22 @@ except ImportError:  # pragma: no cover - local tests import as top-level module
 
 
 def convert_context_materials(context: Any) -> list[str]:
+    """Orchestrate material conversion for the current context."""
     report = utils.make_report()
+    utils.ensure_renderman_engine(context)
+
     materials = utils.collect_unique_materials(utils.get_context_objects(context))
     if not materials:
-        utils.report_error(report, "No materials found on selected objects")
+        utils.report_error(report, "No materials found to convert")
         return report
 
-    for material in materials:
-        utils.convert_principled_material(material, report)
+    utils.convert_materials(materials, report=report)
+
     return report
 
 
 if bpy is not None:
+
     class BLENDERMAN_OT_convert_material(bpy.types.Operator):
         bl_idname = "blenderman.convert_material"
         bl_label = "Convert PBR Material"
@@ -45,5 +49,6 @@ if bpy is not None:
             self.report({"INFO"}, utils.summarize_report(report))
             return {"FINISHED"}
 else:
+
     class BLENDERMAN_OT_convert_material:  # pragma: no cover - import-safe fallback
         pass

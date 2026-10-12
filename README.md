@@ -1,6 +1,6 @@
 # BlenderMan
 
-**BlenderMan** is *enderMan blender addon's addon.  
+**BlenderMan** is Pixar RenderMan for Blender addon's addon.  
 It aims at closing biggest *RM* flaw: scene conversion. Manualy replacing every node in every material from Cycles to *RM* is exhausting, specially in complete scenes or assets.
 
 Use **BlenderMan** instead:
